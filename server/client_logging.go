@@ -39,13 +39,20 @@ func logClientErrors(logger zerolog.Logger) githubapp.ClientMiddleware {
 		return roundTripperFunc(func(r *http.Request) (*http.Response, error) {
 			res, err := next.RoundTrip(r)
 			if err == nil && res != nil && res.StatusCode >= 400 && res.StatusCode < 600 {
-				// Read the response body to capture GitHub's error message,
-				// then restore it so downstream consumers can still read it.
+				// Read the full response body to capture GitHub's error message,
+				// then restore it so downstream consumers still receive it intact.
+				// Only the first maxErrorBodyLen bytes are included in the log
+				// to avoid excessive log volume.
 				var bodyBytes []byte
 				if res.Body != nil {
-					bodyBytes, _ = io.ReadAll(io.LimitReader(res.Body, maxErrorBodyLen))
+					bodyBytes, _ = io.ReadAll(res.Body)
 					res.Body.Close()
 					res.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+				}
+
+				logBody := bodyBytes
+				if len(logBody) > maxErrorBodyLen {
+					logBody = logBody[:maxErrorBodyLen]
 				}
 
 				logEvent := logger.Warn()
@@ -57,7 +64,7 @@ func logClientErrors(logger zerolog.Logger) githubapp.ClientMiddleware {
 					Str("url", r.URL.String()).
 					Int("status", res.StatusCode).
 					Str("github_request_id", res.Header.Get("X-GitHub-Request-Id")).
-					Bytes("response_body", bodyBytes).
+					Bytes("response_body", logBody).
 					Msg("GitHub API returned error status")
 			}
 			return res, err

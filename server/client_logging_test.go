@@ -145,6 +145,40 @@ func TestLogClientErrors_ResponseBodyCaptured(t *testing.T) {
 	}
 }
 
+func TestLogClientErrors_LargeBodyFullyRestored(t *testing.T) {
+	var buf bytes.Buffer
+	logger := zerolog.New(&buf)
+
+	// Create a body larger than maxErrorBodyLen
+	largeBody := strings.Repeat("x", maxErrorBodyLen+5000)
+	mw := logClientErrors(logger)
+	rt := mw(stubTransport{statusCode: 500, body: largeBody})
+
+	req := httptest.NewRequest(http.MethodGet, "https://api.github.com/repos/test/repo", nil)
+	res, err := rt.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// The caller must receive the full body, not a truncated one.
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatalf("unexpected error reading restored body: %v", err)
+	}
+	if len(body) != len(largeBody) {
+		t.Errorf("expected restored body length %d, got %d", len(largeBody), len(body))
+	}
+
+	// The log should only contain the first maxErrorBodyLen bytes.
+	logOutput := buf.String()
+	// Count how many 'x' chars are in the response_body field — should be capped.
+	// The log contains other JSON fields, so we can't do a simple length check,
+	// but we can verify the log doesn't contain the full body.
+	if strings.Contains(logOutput, largeBody) {
+		t.Errorf("log should not contain the full large body, but it does")
+	}
+}
+
 func TestLogClientErrors_3xxNoLog(t *testing.T) {
 	var buf bytes.Buffer
 	logger := zerolog.New(&buf)
