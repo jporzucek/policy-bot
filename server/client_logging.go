@@ -22,20 +22,25 @@ import (
 )
 
 // logClientErrors returns a ClientMiddleware that logs GitHub API responses
-// with 4xx status codes at warn level. This complements githubapp.ClientMetrics,
-// which only increments counters without logging, making it difficult to
-// identify which endpoints and status codes are driving 4xx volume.
+// with 4xx and 5xx status codes. 4xx responses are logged at warn level and
+// 5xx at error level. This complements githubapp.ClientMetrics, which only
+// increments counters without logging, making it difficult to identify which
+// endpoints and status codes are driving error volume.
 func logClientErrors(logger zerolog.Logger) githubapp.ClientMiddleware {
 	return func(next http.RoundTripper) http.RoundTripper {
 		return roundTripperFunc(func(r *http.Request) (*http.Response, error) {
 			res, err := next.RoundTrip(r)
-			if err == nil && res != nil && res.StatusCode >= 400 && res.StatusCode < 500 {
-				logger.Warn().
+			if err == nil && res != nil && res.StatusCode >= 400 && res.StatusCode < 600 {
+				logEvent := logger.Warn()
+				if res.StatusCode >= 500 {
+					logEvent = logger.Error()
+				}
+				logEvent.
 					Str("method", r.Method).
 					Str("url", r.URL.String()).
 					Int("status", res.StatusCode).
 					Str("github_request_id", res.Header.Get("X-GitHub-Request-Id")).
-					Msg("GitHub API returned 4xx")
+					Msg("GitHub API returned error status")
 			}
 			return res, err
 		})
