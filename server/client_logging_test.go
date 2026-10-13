@@ -16,6 +16,7 @@ package server
 
 import (
 	"bytes"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -24,15 +25,19 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// stubTransport returns a fixed response for every request.
+// stubTransport returns a fixed response with an optional body for every request.
 type stubTransport struct {
 	statusCode int
+	body       string
 }
 
 func (s stubTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	rec := httptest.NewRecorder()
 	rec.Header().Set("X-GitHub-Request-Id", "req-123")
 	rec.WriteHeader(s.statusCode)
+	if s.body != "" {
+		rec.WriteString(s.body)
+	}
 	return rec.Result(), nil
 }
 
@@ -103,6 +108,40 @@ func TestLogClientErrors_2xxNoLog(t *testing.T) {
 
 	if buf.Len() != 0 {
 		t.Errorf("expected no log output for 2xx, got: %s", buf.String())
+	}
+}
+
+func TestLogClientErrors_ResponseBodyCaptured(t *testing.T) {
+	var buf bytes.Buffer
+	logger := zerolog.New(&buf)
+
+	errorBody := `{"message":"Not Found","documentation_url":"https://docs.github.com/rest"}`
+	mw := logClientErrors(logger)
+	rt := mw(stubTransport{statusCode: 404, body: errorBody})
+
+	req := httptest.NewRequest(http.MethodGet, "https://api.github.com/repos/test/repo", nil)
+	res, err := rt.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	logOutput := buf.String()
+	// The response body is JSON-escaped in the zerolog output, so check for
+	// the key content rather than the exact raw string.
+	if !strings.Contains(logOutput, "Not Found") {
+		t.Errorf("expected response body content 'Not Found' in log output, got: %s", logOutput)
+	}
+	if !strings.Contains(logOutput, "response_body") {
+		t.Errorf("expected response_body field in log output, got: %s", logOutput)
+	}
+
+	// Verify the body is still readable downstream after we captured it.
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatalf("unexpected error reading restored body: %v", err)
+	}
+	if string(body) != errorBody {
+		t.Errorf("expected body %q, got %q", errorBody, string(body))
 	}
 }
 
