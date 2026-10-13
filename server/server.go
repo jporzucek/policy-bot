@@ -122,6 +122,7 @@ func New(c *Config) (*Server, error) {
 				githubapp.LogGitHubRequestID(),
 				githubapp.LogRequestBody("^"+v4URL.Path+"$"),
 			),
+			logClientErrors(logger),
 			githubapp.ClientMetrics(base.Registry()),
 		),
 	)
